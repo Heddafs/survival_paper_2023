@@ -17,6 +17,9 @@ library(faux)
 load("data/tumor_samples_with_subtype.Rdata")
 load("data/counts_tumors.Rdata")
 
+
+# Hedda take care!
+
 ## ------Formatting annotation file--------------------------------------
 # A bit of formatting: making sure variables that we will use later are the correct data type 
 # Also imputing missing values with KNN and dropping dogs with no Survival days information. 
