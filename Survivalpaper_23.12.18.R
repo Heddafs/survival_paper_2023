@@ -73,7 +73,6 @@ install.packages("candisc")
 correlations <- stats::cancor(gene_data, clinical_onehot[,c(2,5,6)])
 correlations$xcoef
 
-genesandclinical <- 
 prcomp()
 
 # Looks like the correlation is no more than 0.46 between each clinical variable and gene
