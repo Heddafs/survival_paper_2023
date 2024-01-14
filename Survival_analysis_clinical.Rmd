@@ -1,0 +1,721 @@
+---
+title: "Survival analysis"
+author: "Hedda Fjell Scheel"
+date: "2023-12-20"
+output: 
+  html_document:
+    code_folding: hide
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+The **research question** for this analysis:
+
+*Are there any genes who's expression in canine mammary tumors has a
+predictive value on dog survival? (when clincal variables for age,
+neuter status, breed, lymphatic invasion, grade, ER status, HER2 score
+and MPAM50 subtype are accounted for)*
+
+In this first part of the analysis we look at clinical variables as
+predictors of survival. We first provide an overview of the data, then
+look at each clinical variable's ability to predict survival, and lastly
+use stepwise regression to find which variables together make the best
+model.
+
+The tabs:
+
+1.  A Workflow for the entire analysis, this first part is in the
+    preprocessing steps, and is performed on the entire data set
+
+2.  An overview of the data: Group sizes and sensoring status
+
+3.  Plotting the Kaplan Meier curves of clinical variables we are
+    interested in + logrank tests: non-parametric
+
+4.  Exploring clinical variables in univariate cox models + comparing to
+    logrank test
+
+5.  Exploring several of the univariate significant clinical variables
+    in one cox model, usin stepwise selection ("both" selection method)
+    to identify term to include.
+
+6.  Correlation plot for all clinical variables. There are several
+    variables that are closely correlated and therefore some of these
+    terms are left out in the multivariate model.
+
+7.  Checking assumptions: proportional hazards and non-linearity.
+
+```{r, message=FALSE}
+library(survival)
+library(survminer)
+library(glmnet)
+library(DT)
+library(c060)
+library(arsenal)
+library(caret)
+library(gridExtra)
+library(DESeq2)
+library(tidyverse)
+library(VIM) #for KNN impute
+load("data/tumor_samples_with_subtype.Rdata")
+```
+
+#  {.tabset}
+
+## 1) Workflow
+
+![](Workflow.png)
+
+## 2) An overview of the data
+
+### Descriptive table with clinical variables
+
+In the dataset there are 157 dogs with sccessful alignment. Of these, 11
+did not have a number ofdays to event/censoring annotated, so they are
+excluded from this survival analysis (loss to follow-up). Ten dogs had
+NAs for one or more of the clinical variables we will look at, and these
+missing values were imputed using the 5-nearest neighbours. Therefore,
+146 dogs are included in the study.
+
+```{r, results='asis'}
+clin_vars <- c("Age", "Neuter_status", "Grade", "Lymphatic_invasion", "ER_status", "HER2_score", "Breed_Maltese", "Malignitet", "subtype_MPAM50", "Breed", "Histology")
+clinical_tbl <- tumor_samples_with_subtype %>% 
+  mutate(subtype_MPAM50 = as.factor(subtype_MPAM50)) %>% 
+  kNN(variable = clin_vars, k=5) %>% 
+  drop_na("Survival_days") %>% 
+  mutate(Status_survival= as.factor(Status_survival)) %>%
+  select(Sample_ID, all_of(clin_vars), Survival_days, Status_survival) %>% 
+  as_tibble()
+
+
+table_descriptive <- tableby(~Age + Neuter_status + Grade + ER_status + Lymphatic_invasion + Breed + HER2_score + subtype_MPAM50, data = clinical_tbl) 
+labels(table_descriptive) <- c(Neuter_status = "Neuter status", Lymphatic_invasion = "Lymphatic invasion", ER_status = "ER status", HER2_score = "HER2 score", subtype_MPAM50 = "MPAM50 Subtype")
+summary(table_descriptive)
+```
+
+### Overall censoring
+
+In total, there are 146 dogs included in the analysis, of which 108 dogs
+are (right-)censored and 38 are non-censored. Dogs that died are
+annotated with "1" in the Status survival column and censored dogs are
+annotated with "0". There is no information about cause of death for any
+of the dogs.
+
+Folds for crossvalidaton are stratified by censoring for the entire
+analysis. (Not in this script)
+
+```{r}
+table(clinical_tbl$Status_survival)
+
+ggplot(clinical_tbl, aes(x=Status_survival))+
+  geom_bar(mapping=aes(y = after_stat(count)/sum(after_stat(count)), fill=Status_survival))+
+  scale_y_continuous(labels=scales::percent) +
+  ylab("relative frequencies")+
+  scale_fill_discrete(labels=c("Censored", "Dead"), type =c("1"="lightpink", "0"="#b78f76"))+
+  coord_flip()+
+  theme_bw()
+```
+
+### The clinical variables
+
+The number of censored dogs in each group (for clinical parameters) used
+in the analysis is presented below:
+
+-   **Age**: divided into three groups for Kaplan Meier plot + pasted
+    logrank p-value. Scaled and treated as a continuous variable for
+    logrank test and cox models (results in the table in tab 4). A table
+    or the distribution of censored individuals in the three age groups
+    is presented below. We can see that there is more right censoring in
+    younger age groups.
+
+If we divide the dogs into two groups by mean, 87 dogs are older and 49
+dogs are younger.
+
+```{r}
+clinical_tbl <- clinical_tbl %>% 
+  mutate(Age_3group = cut_number(Age, 3)) %>% 
+  mutate(Age_2group = ifelse(Age>mean(Age), ">11.85", "<11.85")) %>% 
+  mutate(Age_nonstd = Age)
+
+ggplot(clinical_tbl, aes(x=Status_survival))+
+  geom_bar(mapping=aes(y = after_stat(count)/sum(after_stat(count)), fill=Status_survival))+
+  scale_y_continuous(labels=scales::percent) +
+  ylab("relative frequencies")+
+  scale_fill_discrete(labels=c("Censored", "Dead"), type =c("1"="lightpink", "0"="#b78f76"))+
+  facet_wrap(.~Age_3group, ncol=1)+
+  coord_flip()+
+  theme_bw()+
+  ggtitle("Age - 3 equally large groups")
+
+ggplot(clinical_tbl, aes(x=Status_survival))+
+  geom_bar(mapping=aes(y = after_stat(count)/sum(after_stat(count)), fill=Status_survival))+
+  scale_y_continuous(labels=scales::percent) +
+  ylab("relative frequencies")+
+  scale_fill_discrete(labels=c("Censored", "Dead"), type =c("1"="lightpink", "0"="#b78f76"))+
+  facet_wrap(.~Age_2group, ncol=1)+
+  coord_flip()+
+  theme_bw()+
+  ggtitle("Age - 2 groups, the mean (11.85) is cut-off")
+
+```
+
+-   **Breed**: There are 20 different breeds present in the dataset. To
+    deal with this we tried to divide into groups: Maltese vs others and
+    small dogs vs others.
+
+```{r}
+table(clinical_tbl$Breed)
+```
+
+```{r}
+ggplot(clinical_tbl, aes(x=Status_survival))+
+  geom_bar(mapping=aes(y = after_stat(count)/sum(after_stat(count)), fill=Status_survival))+
+  scale_y_continuous(labels=scales::percent) +
+  ylab("relative frequencies")+
+  scale_fill_discrete(labels=c("Censored", "Dead"), type =c("1"="lightpink", "0"="#b78f76"))+
+  facet_wrap(.~Breed_Maltese, ncol=1)+
+  coord_flip()+
+  theme_bw()+
+  ggtitle("Breed group alternative 1")
+```
+
+Distribution of censored and non-censored dogs in Maltese and
+non-Maltese dogs. I chose to move forward with categorizing breeds as
+alternative 1.
+
+```{r}
+small_dogs <- c("Maltese", "Bichon Frise", "Pomeranian", "Shih Tzu", "Chihuahua", "Yorkshire Terrier", "Pekingese")
+clinical_tbl <- clinical_tbl %>% 
+  mutate(Breed_small = ifelse(Breed %in% small_dogs, "Small_breed", "Larger_breed"))
+
+ggplot(clinical_tbl, aes(x=Status_survival))+
+  geom_bar(mapping=aes(y = after_stat(count)/sum(after_stat(count)), fill=Status_survival))+
+  scale_y_continuous(labels=scales::percent) +
+  ylab("relative frequencies")+
+  scale_fill_discrete(labels=c("Censored", "Dead"), type =c("1"="lightpink", "0"="#b78f76"))+
+  facet_wrap(.~Breed_small, ncol=1)+
+  coord_flip()+
+  theme_bw()+
+  ggtitle("Breed group alternative 2")
+```
+
+Distribution of censored and non-censored dogs in small and larger
+breeds
+
+-   **Neuter status**: A categorical variable with two levels annotating
+    if dogs are neutered (have removed the estrogen/progesterone
+    producing ovaries) or intact.
+
+```{r}
+ggplot(clinical_tbl, aes(x=Status_survival))+
+  geom_bar(mapping=aes(y = after_stat(count)/sum(after_stat(count)), fill=Status_survival))+
+  scale_y_continuous(labels=scales::percent) +
+  ylab("relative frequencies")+
+  scale_fill_discrete(labels=c("Censored", "Dead"), type =c("1"="lightpink", "0"="#b78f76"))+
+  facet_wrap(.~Neuter_status, ncol=1)+
+  coord_flip()+
+  theme_bw()+
+  ggtitle("Neuter status")
+```
+
+-   **Tissue grade**: Has four levels, the reference level is benign.
+    This original classification (Tissue grade alternative 1) was used
+    for univariate and multivariate cox models (But was one-hot encoded
+    prior to this). Kaplan Meier plots were made using Tissue grade
+    alternative 2 and 3.
+
+```{r}
+#  mutate(Grade=factor(Grade, levels = c("Benign", "1", "2", "3"))) #in In an earlier script, grade was converted to factor with benign as ref level.
+
+clinical_tbl <- clinical_tbl %>% 
+  mutate(Grade_gr2 = replace(Grade, Grade == "2", "1"))
+
+ggplot(clinical_tbl, aes(x=Status_survival))+
+  geom_bar(mapping=aes(y = after_stat(count)/sum(after_stat(count)), fill=Status_survival))+
+  scale_y_continuous(labels=scales::percent) +
+  ylab("relative frequencies")+
+  scale_fill_discrete(labels=c("Censored", "Dead"), type =c("1"="lightpink", "0"="#b78f76"))+
+  facet_wrap(.~Grade, ncol=1)+
+  coord_flip()+
+  theme_bw()+
+  ggtitle("Tissue grade alternative 1")
+
+#is it a problem that grade 2 is still a group even if no dogs are in the group?
+ggplot(clinical_tbl, aes(x=Status_survival))+
+  geom_bar(mapping=aes(y = after_stat(count)/sum(after_stat(count)), fill=Status_survival))+
+  scale_y_continuous(labels=scales::percent) +
+  ylab("relative frequencies")+
+  scale_fill_discrete(labels=c("Censored", "Dead"), type =c("1"="lightpink", "0"="#b78f76"))+
+  facet_wrap(.~Grade_gr2, ncol=1)+
+  coord_flip()+
+  theme_bw()+
+  ggtitle("Tissue grade alternative 2")
+
+
+clinical_tbl <- clinical_tbl %>% 
+  mutate(Grade_gr = ifelse(Grade == "Benign", "Benign", "Malignant"))
+ggplot(clinical_tbl, aes(x=Status_survival))+
+  geom_bar(mapping=aes(y = after_stat(count)/sum(after_stat(count)), fill=Status_survival))+
+  scale_y_continuous(labels=scales::percent) +
+  ylab("relative frequencies")+
+  scale_fill_discrete(labels=c("Censored", "Dead"), type =c("1"="lightpink", "0"="#b78f76"))+
+  facet_wrap(.~Grade_gr, ncol=1)+
+  coord_flip()+
+  theme_bw()+
+  ggtitle("Tissue grade alternative 3")
+```
+
+-   **Lymphatic invasion**: Categorical variable with two levels
+    (present/absent). Defined as tumor cells being present in either
+    regional lymph nodes and/or peritumoral lymph vessels, evaluated by
+    histopathology.
+
+```{r}
+ggplot(clinical_tbl, aes(x=Status_survival))+
+  geom_bar(mapping=aes(y = after_stat(count)/sum(after_stat(count)), fill=Status_survival))+
+  scale_y_continuous(labels=scales::percent) +
+  ylab("relative frequencies")+
+  scale_fill_discrete(labels=c("Censored", "Dead"), type =c("1"="lightpink", "0"="#b78f76"))+
+  facet_wrap(.~Lymphatic_invasion, ncol=1)+
+  coord_flip()+
+  theme_bw()+
+  ggtitle("Lymphatic invasion")
+```
+
+-   **Morphologic diagnosis**: There are many different
+    morphologic/histopathologic diagnoses present in the dog cohort. The
+    carcinomas (malignant epithelially derived cancers) were merged into
+    one group= group 1. The second group contains many adenomas (benign
+    tumors). Maybe this grouping reduces the information we get from
+    histopathology to information we already get from grade?
+
+```{r}
+table(clinical_tbl$Histology)
+carcinomas <- c("Spindle cell carcinoma (Malignant myoepithelioma)", "Simple carcinoma (Tubulopapillary type)", "Simple carcinoma (Anaplastic type)", "Simple carcinoma (Solid type)", "Complex carcinoma", "Carcinosarcoma", "Carcinoma in benign mixed tumor")
+
+clinical_tbl <- clinical_tbl %>% 
+  mutate(Histology_gr = ifelse(Histology %in% carcinomas, "Carcinomas", "Others"))
+ggplot(clinical_tbl, aes(x=Status_survival))+
+  geom_bar(mapping=aes(y = after_stat(count)/sum(after_stat(count)), fill=Status_survival))+
+  scale_y_continuous(labels=scales::percent) +
+  ylab("relative frequencies")+
+  scale_fill_discrete(labels=c("Censored", "Dead"), type =c("1"="lightpink", "0"="#b78f76"))+
+  facet_wrap(.~Histology_gr, ncol=1)+
+  coord_flip()+
+  theme_bw()+
+  ggtitle("Morphologic diagnosis")
+```
+
+-   **ER status**: annotates whether or not the tumors are classified as
+    ER positive (Evaluated by IHC)
+
+```{r}
+ggplot(clinical_tbl, aes(x=Status_survival))+
+  geom_bar(mapping=aes(y = after_stat(count)/sum(after_stat(count)), fill=Status_survival))+
+  scale_y_continuous(labels=scales::percent) +
+  ylab("relative frequencies")+
+  scale_fill_discrete(labels=c("Censored", "Dead"), type =c("1"="lightpink", "0"="#b78f76"))+
+  facet_wrap(.~ER_status, ncol=1, labeller = labeller(ER_status = c("N"="Negative", "P"="Positive")))+
+  coord_flip()+
+  theme_bw()+
+  ggtitle("ER status")
+```
+
+-   **HER2 score**: annotates the HER2 score of the tumor (classified by
+    IHC). This scoring system has four levels: 0,1,2,3. For KM plots the
+    first two levels and the last two were merged, but for logrank test
+    and cox models, all four levels were kept (One-hot encoded).
+
+```{r}
+clinical_tbl <- clinical_tbl %>% 
+  mutate(HER2_gr = ifelse(HER2_score %in% c(0,1), 1, 2))
+
+ggplot(clinical_tbl, aes(x=Status_survival))+
+  geom_bar(mapping=aes(y = after_stat(count)/sum(after_stat(count)), fill=Status_survival))+
+  scale_y_continuous(labels=scales::percent) +
+  ylab("relative frequencies")+
+  scale_fill_discrete(labels=c("Censored", "Dead"), type =c("1"="lightpink", "0"="#b78f76"))+
+  facet_wrap(.~HER2_gr, ncol=1, labeller = labeller(HER2_gr = c("1"="Score 0-1", "2"="Score 2-3")))+
+  coord_flip()+
+  theme_bw()+
+  ggtitle("HER2 score")
+```
+
+-   **MPAM50 subtype** Categorical variable. lumA is set to reference
+    level
+
+```{r}
+clinical_tbl$subtype_MPAM50 <- relevel(as.factor(clinical_tbl$subtype_MPAM50), ref = "LumA")
+
+ggplot(clinical_tbl, aes(x=Status_survival))+
+  geom_bar(mapping=aes(y = after_stat(count)/sum(after_stat(count)), fill=Status_survival))+
+  scale_y_continuous(labels=scales::percent) +
+  ylab("relative frequencies")+
+  scale_fill_discrete(labels=c("Censored", "Dead"), type =c("1"="lightpink", "0"="#b78f76"))+
+  facet_wrap(.~subtype_MPAM50, ncol=1)+
+  coord_flip()+
+  theme_bw()+
+  ggtitle("MPAM50 subtype")
+```
+
+## 3) Kaplan Meier curves
+
+### Kaplan Meier plots for the clinical and pathological variables
+
+```{r}
+clinical_tbl$Status_survival <- as.numeric(clinical_tbl$Status_survival)
+
+## Age: 3 groups
+fitAge3gr <- survfit(Surv(clinical_tbl$Survival_days, clinical_tbl$Status_survival)~Age_3group, data=clinical_tbl)
+Age.plot <- ggsurvplot(fitAge3gr, data=clinical_tbl, 
+           pval = T, 
+           conf.int=T, 
+           legend.title="Age",  
+           legend=c(0.8,0.2),                       
+           legend.labs=c("2-11 years", ">11-13 years", ">13-19 years"), 
+           title= "Survival age- 3 groups")
+
+## Breed: Maltese and small
+
+fitBreed1gr <- survfit(Surv(clinical_tbl$Survival_days, clinical_tbl$Status_survival)~Breed_Maltese, data=clinical_tbl)
+Breed_Maltese.plot <- ggsurvplot(fitBreed1gr, data=clinical_tbl, 
+           pval = T, 
+           conf.int=T, 
+           legend.title="Breed",  
+           legend=c(0.8,0.2), 
+           legend.labs=c("Maltese", "other breeds"), 
+           title= "Survival Maltese vs other")
+
+
+fitBreed2gr <- survfit(Surv(clinical_tbl$Survival_days, clinical_tbl$Status_survival)~Breed_small, data=clinical_tbl)
+Breed_small.plot <- ggsurvplot(fitBreed2gr, data=clinical_tbl, 
+           pval = T, 
+           conf.int=T, 
+           legend.title="Breed",  
+           legend=c(0.8,0.2), 
+           legend.labs=c("Small company dogs", "other breeds"), 
+           title= "Survival small breeds vs other")
+
+
+## Neuter status
+fitNeuter <- survfit(Surv(clinical_tbl$Survival_days, clinical_tbl$Status_survival)~Neuter_status, data=clinical_tbl)
+Neuter.plot <- ggsurvplot(fitNeuter, data=clinical_tbl, 
+           pval = T, 
+           conf.int=T, 
+           legend.title="Neuter status", 
+           legend=c(0.8,0.2), 
+           legend.labs=c("Intact", "Neutered"), 
+           title= "Survival by neuter status")
+
+
+## Grade
+fitMalignitet <- survfit(Surv(clinical_tbl$Survival_days, clinical_tbl$Status_survival)~Malignitet, data=clinical_tbl)
+Malignitet.plot <- ggsurvplot(fitMalignitet, data=clinical_tbl, 
+           pval = T, 
+           conf.int=T, 
+           legend.title="Tumor grade", 
+           legend=c(0.8,0.2), 
+           legend.labs=c("Benign", "Malignant"), 
+           title= "Survival tissue grade")
+
+
+
+fitGradegr2 <- survfit(Surv(clinical_tbl$Survival_days, clinical_tbl$Status_survival)~Grade_gr2, data=clinical_tbl)
+Grade.1.plot <- ggsurvplot(fitGradegr2, data=clinical_tbl, 
+           pval = T, 
+           conf.int=T, 
+           legend.title="Tumor grade", 
+           legend=c(0.8,0.2), 
+           legend.labs=c("Benign", "Grade 1-2", "Grade3"), 
+           title= "Survival tissue grade")
+  
+
+## Lymphatic invasion
+fitLymph <- survfit(Surv(clinical_tbl$Survival_days, clinical_tbl$Status_survival)~Lymphatic_invasion, data=clinical_tbl)
+Lymph_inv.plot <- ggsurvplot(fitLymph, data=clinical_tbl, 
+           pval = T, 
+           conf.int=T, 
+           legend.title="Lymphatic invasion", 
+           legend=c(0.8,0.2), 
+           legend.labs=c("absent", "present"), 
+           title= "Survival lymphatic invasion")
+
+## Histology group
+fitHistology <- survfit(Surv(clinical_tbl$Survival_days, clinical_tbl$Status_survival)~Histology_gr, data=clinical_tbl)
+Histology.plot <- ggsurvplot(fitHistology, data=clinical_tbl, 
+           pval = T, 
+           conf.int=T, 
+           legend.title="Histology class",  
+           legend=c(0.8,0.2),
+           legend.labs=c("Carcinomas", "other"),  
+           title= "Survival histopathology")
+
+## ER status
+fitER <- survfit(Surv(clinical_tbl$Survival_days, clinical_tbl$Status_survival)~ER_status, data=clinical_tbl)
+ER.plot <- ggsurvplot(fitER, data=clinical_tbl, 
+           pval = T, 
+           conf.int=T, 
+           legend.title="ER status", 
+           legend=c(0.8,0.2), 
+           legend.labs=c("Negative", "Positive"), 
+           title= "Survival ER status")
+
+## HER2 score
+fitHER2 <- survfit(Surv(clinical_tbl$Survival_days, clinical_tbl$Status_survival)~HER2_gr, data=clinical_tbl)
+HER2.plot <- ggsurvplot(fitHER2, data=clinical_tbl, 
+           pval = T, 
+           conf.int=T, 
+           legend.title="HER2 score", 
+           legend=c(0.8,0.2), 
+           legend.labs=c("Score 0-1", "Score 2-3"), 
+           title= "Survival HER2 status")
+
+## subtype
+fitMPAM <- survfit(Surv(clinical_tbl$Survival_days, clinical_tbl$Status_survival)~subtype_MPAM50, data=clinical_tbl)
+MPAM.plot <- ggsurvplot(fitMPAM, data=clinical_tbl, 
+           pval = T, 
+           conf.int=T, 
+           legend.title="MPAM50 subtype", 
+           legend=c(0.8,0.2), 
+           legend.labs=c("LumA", "Basal"), 
+           title= "Survival MPAM50 subtype")
+
+```
+
+#### Dog information
+
+The only variable with significant impact on survival is age. The
+survival measured in this study is overall survival (OS) and not tumor
+specific survival, therefore the effect seen here of age is not
+necessarily tumor related.
+
+```{r, fig.align='center', fig.height=8, fig.width=12}
+arrange_ggsurvplots(list(Age.plot, Neuter.plot, Breed_Maltese.plot, Breed_small.plot), ncol = 2, nrow = 2)
+
+```
+
+#### Tumor pathology
+
+Both grade and lymphatic invasion have a highly significant impact on
+the survival according to these graphs and the logrank p-value.\
+The plots for histopathology and grade(benign/malignant) are very
+similar, which illustrates the great amount of shared information in the
+two groups. A table of Histology group vs grade(benign/malignant)
+verifies this suspicion. The table tells us that all carcinomas are
+malignant and most non-carcinomas are benign.
+
+```{r, fig.align='center', fig.height=8, fig.width=12}
+arrange_ggsurvplots(list(Malignitet.plot, Grade.1.plot, Histology.plot, Lymph_inv.plot), nrow = 2, ncol = 2)
+```
+
+The top right and top left plots are very similar as grouping grade in
+two groups and grouping histopathological diagnoses in two groups is
+pretty much the same groups.
+
+```{r}
+table(clinical_tbl$Grade_gr, clinical_tbl$Histology_gr)
+```
+
+#### Molecular markers
+
+Dogs with ER positive tumors generally have a longer survival than ER
+negative tumors. HER2 status does not seem to influence survival. Kaplan
+Meier curve of MPAM50 subtype show better survival in lumA tumors.
+
+```{r, fig.align='center', fig.height=8, fig.width=12}
+arrange_ggsurvplots(list(ER.plot, HER2.plot, MPAM.plot), nrow = 2, ncol=2)
+
+```
+
+## 4) Univariate cox models
+
+In this section we will be exploring the clinical variables in
+univariate cox models to see which variables should probably be included
+in a survival model. From the table we can see that the findings in the
+logrank test is in concordance with the univariate cox models.
+
+Prior to model fitting, all clinical variables are one-hot encoded and
+age is scaled.
+
+We do not correct for multiple testing here because this is not our
+final model, it is just a sort of feature selection of clinical
+variables.
+
+```{r}
+## Standardizing numerical variables in clinical_tbl and 0-1 encoding categorical variables with two levels
+clinical_onehot <- clinical_tbl %>% 
+  mutate(Age_scaled = as.numeric(scale(Age, center=T, scale=T))) %>% 
+  mutate(Lymphatic_invasion_present = as.factor(ifelse(Lymphatic_invasion == "Present", 1, 0)),
+         is_Malignant = ifelse(Malignitet == "Malignant", 1, 0),
+         is_carcinoma = ifelse(Histology_gr == "Carcinomas", 1, 0)) %>% 
+  mutate(is_ER_positive = as.factor(ifelse(ER_status == "P", 1, 0))) %>% 
+  mutate(is_Neutered = as.factor(ifelse(Neuter_status == "Neutered", 1, 0))) %>% 
+  mutate(is_Basal_subtype = as.factor(ifelse(subtype_MPAM50 == "Basal", 1, 0))) %>% 
+  mutate(is_Maltese = as.factor(ifelse(Breed_Maltese == "Maltese", 1, 0))) %>% 
+  mutate(Grade_1 = ifelse(Grade=="1", 1, 0), 
+         Grade_2 = ifelse(Grade=="2", 1, 0),
+         Grade_3 = ifelse(Grade=="3", 1, 0)) %>%
+  mutate(HER2_score_1 = ifelse(HER2_score=="1", 1, 0), 
+         HER2_score_2 = ifelse(HER2_score=="2", 1, 0), 
+         HER2_score_3 = ifelse(HER2_score=="3", 1, 0)) %>%
+  column_to_rownames(var= "Sample_ID") %>% 
+  select(Status_survival, Survival_days,c(22:35))
+
+
+#### Making a result table for storing univariate test results 
+vec_param <- colnames(clinical_onehot[3:ncol(clinical_onehot)])
+results_table <- tibble(parameter = vec_param, logrank.p = NA, cox.single.hazard = NA, cox.single.p =NA)
+response <- Surv(clinical_onehot$Survival_days, clinical_onehot$Status_survival) #defining outcome variable
+
+# For loop running univariate cox models
+results_table$cox.single.p <- vapply(vec_param, function(variable){
+    model <- coxph(as.formula(sprintf("Surv(Survival_days, Status_survival) ~ %s", variable)), data = clinical_onehot)
+    summary(model)$coefficients[,"Pr(>|z|)"]
+  }, numeric(1))
+
+results_table$cox.single.hazard <- vapply(vec_param, function(variable){
+  model <- coxph(as.formula(sprintf("Surv(Survival_days, Status_survival) ~ %s", variable)), data = clinical_onehot)
+  summary(model)$coefficients[,"exp(coef)"]
+}, numeric(1))
+
+# Running logrank tests and pasting p-value in results_table
+for(i in vec_param){
+  surv_diff <- survdiff(response ~ get(i), data = clinical_onehot)
+  correct_row <- which(results_table$parameter == i)
+  results_table$logrank.p[correct_row] <- surv_diff$pvalue
+}
+
+results_table <- results_table %>% 
+  mutate(Cox.single.sign = ifelse(cox.single.p<0.05, "Yes", "No")) %>% 
+  mutate(logrank.sign = ifelse(logrank.p<0.05, "Yes", "No")) %>% 
+  dplyr::select(parameter, logrank.p, logrank.sign, everything())
+
+datatable(results_table, options = list(pageLength = 14, scrollX = T), caption = htmltools::tags$caption(style = 'caption-side: top; text-align: left;', 'Effect of parameter on survival')) %>% formatStyle("logrank.sign", background = styleEqual(unique(results_table$logrank.sign), c('lightgreen', 'pink'))) %>% formatStyle("Cox.single.sign", background = styleEqual(unique(results_table$Cox.single.sign), c('lightgreen', 'pink')))
+```
+
+## 5) Multivariate Cox model
+
+### Multivariate cox model
+
+We will now make a new cox model with several parameters. Histology
+group was removed because the grouping (carcinoma vs others) contained a
+lot of the same information as the other malignancy indicator, grade, as
+mentioned earlier. Malignancy (benign/malignant) was also removed due to
+high correlation to several other parameters. See the tab called
+"Correlations" for correlation plots.\
+
+#### Stepwise regression, "both" selection
+
+Stepwise regression with "both" selection using `MASS::stepAIC()`
+
+```{r, results='hide'}
+res.cox.empty <- coxph(Surv(clinical_onehot$Survival_days, clinical_onehot$Status_survival) ~ 1, data = clinical_onehot)
+fit.best.both <- MASS::stepAIC(res.cox.empty, direction = "both", scope=list(lower=res.cox.empty, upper= ~ Age_scaled + Lymphatic_invasion_present + is_ER_positive + is_Basal_subtype + Grade_3))
+
+```
+
+The model chosen with "both" selection includes three parameters: Age,
+Lymphatic invasion and ER status. Neither Grade 3 nor MPAM50 subtype,
+which were significant in univariate models, were included in a
+multivariate model. This probably has to do with the these two
+variables' correlation to Lymphatic invasion- see next tab
+"Correlations"
+
+```{r}
+summary(fit.best.both)
+```
+#### If Malignancy is not removed
+If is_Malignant is included in stepAIC formula, this term will replace ER status and lymphatic invasion. 
+```{r, results='hide'}
+fit.best.both2 <- MASS::stepAIC(res.cox.empty, direction = "both", scope=list(lower=res.cox.empty, upper= ~ Age_scaled + Lymphatic_invasion_present + is_ER_positive + is_Basal_subtype + Grade_3 + is_Malignant))
+```
+
+```{r}
+summary(fit.best.both2)
+```
+
+
+## 6) Correlations
+
+```{r}
+variables_both <- clinical_onehot %>% mutate_if(is.factor, as.numeric) %>% select(-Survival_days, -Status_survival)
+
+corr_matrix <- matrix(nrow = ncol(variables_both), ncol = ncol(variables_both), dimnames = list(colnames(variables_both), colnames(variables_both)))
+for (i in colnames(variables_both)) {
+  for (j in colnames(variables_both)) {
+  corr <- stats::cor(variables_both[,i], variables_both[,j])
+  corr_matrix[j,i] <- corr
+}
+}
+
+corrplot::corrplot(corr_matrix, order = "hclust", tl.col = 'black', tl.cex = 0.6)
+```
+
+## 7) Checking assumptions
+
+We will now check the assumptions for the model chosen by stepwise
+regression, as described here:
+<http://www.sthda.com/english/wiki/cox-model-assumptions> . The
+assumptions for cox proportional hazards models are:
+
+-   proportionalhazards over time and
+
+-   linear relationships between each covariate and the log hazard.
+
+**Test for proportional hazards**\
+From the table, we can read that the p-value for all terms is \>0.05,
+therefore the hazards are proportional. The three graphs show the same
+
+```{r, fig.height=7}
+test.ph <- cox.zph(fit.best.both)
+test.ph
+```
+
+**Test for non-linearity**\
+Only relevant for age as the other two variables are binominal. Here,
+linearity for age is tested for the standardized age-values.
+<https://www.bookdown.org/rwnahhas/RMPH/survival-linearity.html>
+
+```{r, fig.height=8}
+#ggcoxfunctional(Surv(clinical_tbl$Survival_days, clinical_tbl$Status_survival) ~ Age + log(Age) + sqrt(Age), data = clinical_tbl) # This function does not work when Age is standardized (cannot do log or sqrt of negative numbers)
+
+par(mfrow = c(2,1))
+
+Y <- resid(coxph(Surv(clinical_onehot$Survival_days, clinical_onehot$Status_survival) ~ Age_scaled + Lymphatic_invasion_present + is_ER_positive, data = clinical_onehot), type = "martingale")
+X <- clinical_onehot$Age
+
+plot(X,Y, pch = 20, col = "darkgray",
+     xlab = "Age", ylab = "Martingale Residual",
+     main = "Residuals vs. standardized age",
+     cex.main = 0.90)
+
+abline(h = 0)
+lines(smooth.spline(X, Y, df = 7), lty = 2, lwd = 2)
+
+Y <- resid(coxph(Surv(clinical_tbl$Survival_days, clinical_tbl$Status_survival) ~ Age_nonstd + Lymphatic_invasion + ER_status, data = clinical_tbl), type = "martingale")
+X <- clinical_tbl$Age_nonstd
+
+plot(X,Y, pch = 20, col = "darkgray",
+     xlab = "Age", ylab = "Martingale Residual",
+     main = "Residuals vs. non-standardized age",
+     cex.main = 0.90)
+
+abline(h = 0)
+lines(smooth.spline(X, Y, df = 7), lty = 2, lwd = 2)
+```
+
+**Testing influencial observations**\
+Explanation for the first plots from website: "Specifying the argument
+type ="dfbeta", plots the estimated changes in the regression
+coefficients upon deleting each observation in turn; likewise,
+type="dfbetas" produces the estimated changes in the coefficients
+divided by their standard errors."
+<http://www.sthda.com/english/wiki/cox-model-assumptions>
+
+```{r}
+ggcoxdiagnostics(fit.best.both, type = "dfbeta",
+                 linear.predictions = FALSE, ggtheme = theme_bw())
+ggcoxdiagnostics(fit.best.both, type = "deviance",
+                 linear.predictions = FALSE, ggtheme = theme_bw())
+```
