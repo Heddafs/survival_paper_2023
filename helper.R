@@ -31,6 +31,9 @@ preprocess_genes <- function(x, y, variance_cutoff = 1000, corr_cutoff = 0.95, f
   normalized_counts <- normalized_counts[,clinical_tbl$Sample_ID] #making sure 
   # normalized counts are in the correct order. 
   
+  # log2 transformation
+  normalized_counts <- log(normalized_counts+1)
+  
   ## Feature selection with M3C::featurefilter() = Keeps top 1000 most variable genes
   ngenes = nrow(normalized_counts)
   ngenes_tokeep = variance_cutoff
@@ -46,9 +49,6 @@ preprocess_genes <- function(x, y, variance_cutoff = 1000, corr_cutoff = 0.95, f
   length(idx) # number of genes removed = 72
   gene_data <- genes_topVar[,-c(idx)]
   
-  
-  # log2 transformation
-  gene_data <- log(gene_data+1)
   
   # Standardizing gene expression
   gene_data <- scale(gene_data, center = T, scale = T)
