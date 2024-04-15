@@ -58,6 +58,9 @@ library(gridExtra)
 library(DESeq2)
 library(tidyverse)
 library(VIM) #for KNN impute
+library(sjPlot)
+library(sjmisc)
+library(sjlabelled)
 load("data/tumor_samples_with_subtype.Rdata")
 ```
 
@@ -89,7 +92,7 @@ clinical_tbl <- tumor_samples_with_subtype %>%
   as_tibble()
 
 
-table_descriptive <- tableby(~Age + Neuter_status + Grade + ER_status + Lymphatic_invasion + Breed + HER2_score + subtype_MPAM50, data = clinical_tbl) 
+table_descriptive <- tableby(~Age + Neuter_status + Grade + ER_status + Lymphatic_invasion + Breed_Maltese + HER2_score + subtype_MPAM50, data = clinical_tbl) 
 labels(table_descriptive) <- c(Neuter_status = "Neuter status", Lymphatic_invasion = "Lymphatic invasion", ER_status = "ER status", HER2_score = "HER2 score", subtype_MPAM50 = "MPAM50 Subtype")
 summary(table_descriptive)
 ```
@@ -177,14 +180,8 @@ ggplot(clinical_tbl, aes(x=Status_survival))+
   facet_wrap(.~Breed_Maltese, ncol=1)+
   coord_flip()+
   theme_bw()+
-  ggtitle("Breed group alternative 1")
-```
+  ggtitle("Breeds grouped by Maltese vs non-Maltese")
 
-Distribution of censored and non-censored dogs in Maltese and
-non-Maltese dogs. I chose to move forward with categorizing breeds as
-alternative 1.
-
-```{r}
 small_dogs <- c("Maltese", "Bichon Frise", "Pomeranian", "Shih Tzu", "Chihuahua", "Yorkshire Terrier", "Pekingese")
 clinical_tbl <- clinical_tbl %>% 
   mutate(Breed_small = ifelse(Breed %in% small_dogs, "Small_breed", "Larger_breed"))
@@ -197,11 +194,14 @@ ggplot(clinical_tbl, aes(x=Status_survival))+
   facet_wrap(.~Breed_small, ncol=1)+
   coord_flip()+
   theme_bw()+
-  ggtitle("Breed group alternative 2")
+  ggtitle("Breed group alternative 2: small vs larger")
 ```
 
-Distribution of censored and non-censored dogs in small and larger
-breeds
+Distribution of censored and non-censored dogs in Maltese and
+non-Maltese dogs. I chose to move forward with categorizing breeds as
+alternative 1.
+
+
 
 -   **Neuter status**: A categorical variable with two levels annotating
     if dogs are neutered (have removed the estrogen/progesterone
@@ -624,6 +624,7 @@ variables' correlation to Lymphatic invasion- see next tab
 
 ```{r}
 summary(fit.best.both)
+tab_model(fit.best.both, title = "Multivariate cox model", string.est = "Hazard")
 ```
 #### If Malignancy is not removed
 If is_Malignant is included in stepAIC formula, this term will replace ER status and lymphatic invasion. 
@@ -633,6 +634,7 @@ fit.best.both2 <- MASS::stepAIC(res.cox.empty, direction = "both", scope=list(lo
 
 ```{r}
 summary(fit.best.both2)
+tab_model(fit.best.both2, title = "Multivariate cox model", string.est = "Hazard")
 ```
 
 
