@@ -91,9 +91,12 @@ clinical_tbl <- tumor_samples_with_subtype %>%
   select(Sample_ID, all_of(clin_vars), Survival_days, Status_survival) %>% 
   as_tibble()
 
+carcinomas <- c("Spindle cell carcinoma (Malignant myoepithelioma)", "Simple carcinoma (Tubulopapillary type)", "Simple carcinoma (Anaplastic type)", "Simple carcinoma (Solid type)", "Complex carcinoma", "Carcinosarcoma", "Carcinoma in benign mixed tumor")
+clinical_tbl <- clinical_tbl %>% 
+  mutate(Histology_gr = ifelse(Histology %in% carcinomas, "Carcinomas", "Others"))
 
-table_descriptive <- tableby(~Age + Neuter_status + Grade + ER_status + Lymphatic_invasion + Breed_Maltese + HER2_score + subtype_MPAM50, data = clinical_tbl) 
-labels(table_descriptive) <- c(Neuter_status = "Neuter status", Lymphatic_invasion = "Lymphatic invasion", ER_status = "ER status", HER2_score = "HER2 score", subtype_MPAM50 = "MPAM50 Subtype")
+table_descriptive <- tableby(~Age + Breed_Maltese + Neuter_status + Histology_gr + Grade + Lymphatic_invasion + ER_status +  HER2_score + subtype_MPAM50, data = clinical_tbl) 
+labels(table_descriptive) <- c(Neuter_status = "Neuter status", Breed_Maltese = "Breed group",Histology_gr = "Histology group", Lymphatic_invasion = "Lymphatic invasion", ER_status = "ER status", HER2_score = "HER2 score", subtype_MPAM50 = "MPAM50 Subtype")
 summary(table_descriptive)
 ```
 
@@ -292,10 +295,7 @@ ggplot(clinical_tbl, aes(x=Status_survival))+
 
 ```{r}
 table(clinical_tbl$Histology)
-carcinomas <- c("Spindle cell carcinoma (Malignant myoepithelioma)", "Simple carcinoma (Tubulopapillary type)", "Simple carcinoma (Anaplastic type)", "Simple carcinoma (Solid type)", "Complex carcinoma", "Carcinosarcoma", "Carcinoma in benign mixed tumor")
 
-clinical_tbl <- clinical_tbl %>% 
-  mutate(Histology_gr = ifelse(Histology %in% carcinomas, "Carcinomas", "Others"))
 ggplot(clinical_tbl, aes(x=Status_survival))+
   geom_bar(mapping=aes(y = after_stat(count)/sum(after_stat(count)), fill=Status_survival))+
   scale_y_continuous(labels=scales::percent) +
@@ -370,116 +370,159 @@ clinical_tbl$Status_survival <- as.numeric(clinical_tbl$Status_survival)
 fitAge3gr <- survfit(Surv(clinical_tbl$Survival_days, clinical_tbl$Status_survival)~Age_3group, data=clinical_tbl)
 Age.plot <- ggsurvplot(fitAge3gr, data=clinical_tbl, 
            pval = T, 
-           conf.int=T, 
-           legend.title="Age",  
-           legend=c(0.8,0.2),                       
-           legend.labs=c("2-11 years", ">11-13 years", ">13-19 years"), 
-           title= "Survival age- 3 groups")
+           conf.int=F, 
+           #legend.title="Age",  
+           legend="none",
+           palette= c("darkmagenta", "darkorange2", "forestgreen"),
+           #legend.labs=c("2-11 years", ">11-13 years", ">13-19 years"), 
+           title= "Age", 
+           font.title = 25, 
+           font.x = 18, 
+           font.y = 18, 
+           xlab = "Days")
 
 ## Breed: Maltese and small
 
 fitBreed1gr <- survfit(Surv(clinical_tbl$Survival_days, clinical_tbl$Status_survival)~Breed_Maltese, data=clinical_tbl)
 Breed_Maltese.plot <- ggsurvplot(fitBreed1gr, data=clinical_tbl, 
            pval = T, 
-           conf.int=T, 
+           conf.int=F, 
            legend.title="Breed",  
            legend=c(0.8,0.2), 
            legend.labs=c("Maltese", "other breeds"), 
-           title= "Survival Maltese vs other")
+           title= "Breed", 
+           font.title = 25, 
+           font.x = 18, 
+           font.y = 18, 
+           xlab = "Days")
 
 
 fitBreed2gr <- survfit(Surv(clinical_tbl$Survival_days, clinical_tbl$Status_survival)~Breed_small, data=clinical_tbl)
 Breed_small.plot <- ggsurvplot(fitBreed2gr, data=clinical_tbl, 
            pval = T, 
-           conf.int=T, 
+           conf.int=F, 
            legend.title="Breed",  
            legend=c(0.8,0.2), 
            legend.labs=c("Small company dogs", "other breeds"), 
-           title= "Survival small breeds vs other")
+           title= "Breed", 
+           font.title = 25, 
+           font.x = 18, 
+           font.y = 18, 
+           xlab = "Days")
 
 
 ## Neuter status
 fitNeuter <- survfit(Surv(clinical_tbl$Survival_days, clinical_tbl$Status_survival)~Neuter_status, data=clinical_tbl)
 Neuter.plot <- ggsurvplot(fitNeuter, data=clinical_tbl, 
            pval = T, 
-           conf.int=T, 
+           conf.int=F, 
            legend.title="Neuter status", 
            legend=c(0.8,0.2), 
            legend.labs=c("Intact", "Neutered"), 
-           title= "Survival by neuter status")
+           title= "Neuter status", 
+           font.title = 25, 
+           font.x = 18, 
+           font.y = 18, 
+           xlab = "Days")
 
 
 ## Grade
 fitMalignitet <- survfit(Surv(clinical_tbl$Survival_days, clinical_tbl$Status_survival)~Malignitet, data=clinical_tbl)
 Malignitet.plot <- ggsurvplot(fitMalignitet, data=clinical_tbl, 
            pval = T, 
-           conf.int=T, 
+           conf.int=F, 
            legend.title="Tumor grade", 
            legend=c(0.8,0.2), 
            legend.labs=c("Benign", "Malignant"), 
-           title= "Survival tissue grade")
+           title= "Tissue grade", 
+           font.title = 25, 
+           font.x = 18, 
+           font.y = 18, 
+           xlab = "Days")
 
 
 
 fitGradegr2 <- survfit(Surv(clinical_tbl$Survival_days, clinical_tbl$Status_survival)~Grade_gr2, data=clinical_tbl)
 Grade.1.plot <- ggsurvplot(fitGradegr2, data=clinical_tbl, 
            pval = T, 
-           conf.int=T, 
-           legend.title="Tumor grade", 
-           legend=c(0.8,0.2), 
-           legend.labs=c("Benign", "Grade 1-2", "Grade3"), 
-           title= "Survival tissue grade")
+           conf.int=F, 
+           legend="none", 
+           title= "Tissue grade", 
+           palette= c("darkmagenta", "darkorange2", "forestgreen"),
+           font.title = 25, 
+           font.x = 18, 
+           font.y = 18, 
+           xlab = "Days")
   
 
 ## Lymphatic invasion
 fitLymph <- survfit(Surv(clinical_tbl$Survival_days, clinical_tbl$Status_survival)~Lymphatic_invasion, data=clinical_tbl)
 Lymph_inv.plot <- ggsurvplot(fitLymph, data=clinical_tbl, 
            pval = T, 
-           conf.int=T, 
-           legend.title="Lymphatic invasion", 
-           legend=c(0.8,0.2), 
-           legend.labs=c("absent", "present"), 
-           title= "Survival lymphatic invasion")
+           conf.int=F, 
+           legend="none", 
+           palette= c("darkmagenta", "darkorange2"),
+           title= " Lymphatic invasion", 
+           font.title = 25, 
+           font.x = 18, 
+           font.y = 18, 
+           xlab = "Days")
 
 ## Histology group
 fitHistology <- survfit(Surv(clinical_tbl$Survival_days, clinical_tbl$Status_survival)~Histology_gr, data=clinical_tbl)
 Histology.plot <- ggsurvplot(fitHistology, data=clinical_tbl, 
            pval = T, 
-           conf.int=T, 
+           conf.int=F, 
            legend.title="Histology class",  
            legend=c(0.8,0.2),
            legend.labs=c("Carcinomas", "other"),  
-           title= "Survival histopathology")
+           title= "Histopathology", 
+           font.title = 25, 
+           font.x = 18, 
+           font.y = 18, 
+           xlab = "Days")
 
 ## ER status
 fitER <- survfit(Surv(clinical_tbl$Survival_days, clinical_tbl$Status_survival)~ER_status, data=clinical_tbl)
 ER.plot <- ggsurvplot(fitER, data=clinical_tbl, 
            pval = T, 
-           conf.int=T, 
-           legend.title="ER status", 
-           legend=c(0.8,0.2), 
-           legend.labs=c("Negative", "Positive"), 
-           title= "Survival ER status")
+           conf.int=F,
+           legend = "none",
+           palette= c("red", "darkblue"),
+           title= "ER status", 
+           font.title = 25, 
+           font.x = 18, 
+           font.y = 18, 
+           xlab = "Days")
 
 ## HER2 score
 fitHER2 <- survfit(Surv(clinical_tbl$Survival_days, clinical_tbl$Status_survival)~HER2_gr, data=clinical_tbl)
 HER2.plot <- ggsurvplot(fitHER2, data=clinical_tbl, 
            pval = T, 
-           conf.int=T, 
+           conf.int=F, 
            legend.title="HER2 score", 
-           legend=c(0.8,0.2), 
+           legend=c(0.8,0.2),
            legend.labs=c("Score 0-1", "Score 2-3"), 
-           title= "Survival HER2 status")
+           title= "HER2 status",            
+           font.title = 25, 
+           font.x = 18, 
+           font.y = 18, 
+           xlab = "Days")
 
 ## subtype
 fitMPAM <- survfit(Surv(clinical_tbl$Survival_days, clinical_tbl$Status_survival)~subtype_MPAM50, data=clinical_tbl)
 MPAM.plot <- ggsurvplot(fitMPAM, data=clinical_tbl, 
            pval = T, 
-           conf.int=T, 
+           conf.int=F, 
            legend.title="MPAM50 subtype", 
            legend=c(0.8,0.2), 
+           palette= c("darkblue", "red"),
            legend.labs=c("LumA", "Basal"), 
-           title= "Survival MPAM50 subtype")
+           title= "MPAM50 subtype", 
+           font.title = 25, 
+           font.x = 18, 
+           font.y = 18, 
+           xlab = "Days")
 
 ```
 
@@ -525,6 +568,11 @@ Meier curve of MPAM50 subtype show better survival in lumA tumors.
 
 ```{r, fig.align='center', fig.height=8, fig.width=12}
 arrange_ggsurvplots(list(ER.plot, HER2.plot, MPAM.plot), nrow = 2, ncol=2)
+ggsave(file = "plots/KMplot_ER.png", plot= print(ER.plot$plot), height = 3.5, width = 5)
+ggsave(file = "plots/KMplot_MPAM.png", plot= print(MPAM.plot$plot), height = 3.5, width = 5)
+ggsave(file = "plots/KMplot_lymph.png", plot= print(Lymph_inv.plot$plot), height = 3.5, width = 5)
+ggsave(file = "plots/KMplot_grade.png", plot= print(Grade.1.plot$plot), height = 3.5, width = 5)
+ggsave(file = "plots/KMplot_age.png", plot= print(Age.plot$plot), height = 3.5, width = 5)
 
 ```
 
@@ -624,24 +672,14 @@ variables' correlation to Lymphatic invasion- see next tab
 
 ```{r}
 summary(fit.best.both)
-tab_model(fit.best.both, title = "Multivariate cox model", string.est = "Hazard")
-```
-#### If Malignancy is not removed
-If is_Malignant is included in stepAIC formula, this term will replace ER status and lymphatic invasion. 
-```{r, results='hide'}
-fit.best.both2 <- MASS::stepAIC(res.cox.empty, direction = "both", scope=list(lower=res.cox.empty, upper= ~ Age_scaled + Lymphatic_invasion_present + is_ER_positive + is_Basal_subtype + Grade_3 + is_Malignant))
-```
-
-```{r}
-summary(fit.best.both2)
-tab_model(fit.best.both2, title = "Multivariate cox model", string.est = "Hazard")
+tab_model(data = fit.best.both, title = "Multivariate cox model", string.est = "Hazard")
 ```
 
 
 ## 6) Correlations
 
 ```{r}
-variables_both <- clinical_onehot %>% mutate_if(is.factor, as.numeric) %>% select(-Survival_days, -Status_survival)
+variables_both <- clinical_onehot %>% mutate_if(is.factor, as.numeric) %>% select(-Survival_days, -Status_survival, -is_Malignant)
 
 corr_matrix <- matrix(nrow = ncol(variables_both), ncol = ncol(variables_both), dimnames = list(colnames(variables_both), colnames(variables_both)))
 for (i in colnames(variables_both)) {
@@ -650,8 +688,11 @@ for (i in colnames(variables_both)) {
   corr_matrix[j,i] <- corr
 }
 }
+colnames(corr_matrix) <- c("Age", "Lymphatic invasion", "Carcinoma", "ER positive", "Neutered", "MPAM50 basal-like subtype", "Maltese", "Grade1", "Grade2", "Grade3", "HER2 score 1", "HER2 score 2", "HER2 score 3")
+rownames(corr_matrix) <- c("Age", "Lymphatic invasion", "Carcinoma", "ER positive", "Neutered", "MPAM50 basal-like subtype", "Maltese", "Grade1", "Grade2", "Grade3", "HER2 score 1", "HER2 score 2", "HER2 score 3")
 
-corrplot::corrplot(corr_matrix, order = "hclust", tl.col = 'black', tl.cex = 0.6)
+corrplot::corrplot(corr_matrix, order = "original", tl.col = 'black', tl.cex = 0.6, tl.srt = 45, type = "lower", diag = F)
+
 ```
 
 ## 7) Checking assumptions
