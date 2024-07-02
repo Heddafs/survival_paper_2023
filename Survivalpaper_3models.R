@@ -12,6 +12,8 @@ library(caret)
 source("helper.R") 
 library(VIM)
 library(faux)
+library(corrplot)
+library(riskRegression)
 load("data/tumor_samples_with_subtype.Rdata")
 load("data/counts_tumors.Rdata")
 
@@ -50,7 +52,14 @@ all(colnames(counts_tumors) == clinical_tbl$Sample_ID) #true --> same order of d
 
 #Preprocessing: normalizing, variance filtering, removing highly correlated genes, 
 # log2 transforming, scaling and univariate cox filtering. 
-gene_data <- preprocess_genes(x = counts_tumors, y=clinical_tbl, variance_cutoff = 1000, corr_cutoff = 0.95, fdr_cutoff = 0.1)
+preprocess_res <- preprocess_genes(x = counts_tumors, y=clinical_tbl, variance_cutoff = 1000, corr_cutoff = 0.95, fdr_cutoff = 0.1)
+results_univariate_genes <- as.data.frame(preprocess_res$univariate_result) %>% rownames_to_column(var="Gene names") # results univariate tests genes - fdr adj p-value. 
+writexl::write_xlsx(results_univariate_genes, "plots/results_univariate_genes.xlsx")
+
+str(preprocess_res$genes_uncorrelated) # 999 genes were tested in univariate --> only one gene removed due to high correlation.
+
+gene_data <- preprocess_res$univariate_significant_genes
+
 
 ###### Checking correlations ######## 
 
@@ -69,12 +78,11 @@ for (i in colnames(variables_both)) {
 }
 }
 
-corr_plot <- corrplot(corr_matrix, order = "hclust", tl.col = 'black', tl.cex = 0.6)
+corr_plot <- corrplot(corr_matrix, order = "hclust", tl.col = "red4", tl.cex = 0.75, tl.srt = 45, type = "lower", diag = F)
 # Looks like the correlation is no more than 0.46 between each clinical variable and gene
-
-### Maybe change to cancor::CCA #####
-correlations <- stats::cancor(gene_data, clinical_onehot[,clin_vars_corr])
-correlations$xcoef
+colnames(corr_matrix)[1:3] <- ""
+rownames(corr_matrix)[1:3] <- ""
+corr_plot <- corrplot(corr_matrix, order = "hclust", tl.col = "black", tl.cex = 0.75, tl.srt = 45, type = "lower", diag = F, add = T)
 
 
 ## -------Model fitting ---------------------------------
@@ -92,7 +100,7 @@ Results_model_eval <- model_evaluation(x = clinical_onehot,
                             pf = c(rep(0, length(clin_vars)), # Clinical variables are not penalized
                                 rep(1, ncol(gene_data)))) 
 
-save(Results_model_eval, file = "results_modelevaluation_3models.Rda") # saving results table 
+save(Results_model_eval, file = "results_modelevaluation_2024_06_25.Rda") # saving results table 
 
 # Plotting histogram of the alpha value chosen for both models for each of the iterations
 alphas_plot <- Results_model_eval %>%   
@@ -104,44 +112,67 @@ alphas_plot <- Results_model_eval %>%
   facet_wrap("Model_id")+
   ggtitle("Tuned alpha value used for cv.glmnet()")+
   theme_bw()
-ggsave(alphas_plot, file = "alphas_plot_3models.jpeg", height = 6, width = 8)
+ggsave(alphas_plot, file = "alphas_plot_2024_06_25.jpeg", height = 6, width = 8)
+
+# Median and range of number of terms included in the combined model
+Results_model_eval %>% filter(Metric_id == "Uno's C-index", Model_id == "Cox.both") %>% pull(nfeatures_gene_model) %>% median
+Results_model_eval %>% filter(Metric_id == "Uno's C-index", Model_id == "Cox.both") %>% pull(nfeatures_both_model) %>% range
+
+# Median and range of number of terms included in gene only model
+Results_model_eval %>% filter(Metric_id == "Uno's C-index", Model_id == "Cox.genes") %>% pull(nfeatures_gene_model) %>% median
+Results_model_eval %>% filter(Metric_id == "Uno's C-index", Model_id == "Cox.genes") %>% pull(nfeatures_gene_model) %>% range
+
 
 #plotting obtained C-indexes for the three models.
-
 my_comparisons <- list( c("Cox.both", "Cox.clinical"), c("Cox.both", "Cox.genes"), c("Cox.clinical", "Cox.genes") )
 
 # Overall C-indexes:
 C_index_plot <- Results_model_eval %>% 
-  filter(Metric_id %in% c("Harrel's C-index", "Uno's C-index")) %>% 
+  filter(Metric_id == "Uno's C-index") %>% 
   mutate(across(Model_id, 
-                ~factor(., levels=c("Cox.clinical", "Cox.both", "Cox.genes")))) %>% 
+                ~factor(., levels=c("Cox.clinical", "Cox.genes", "Cox.both")))) %>% 
   ggplot(., aes(x = Model_id, y = value))+ 
-  geom_boxplot()+
-  facet_wrap(~Metric_id)+
-  theme_bw()+ 
-  ylim(0,1)+
-  ggtitle("Overall discrimiation")+
-  stat_compare_means(comparisons = my_comparisons, label.y = c(0.95, 0.2, 0.05))
+  geom_boxplot(fill=c("red4", "dodgerblue4", "green4"))+
+  ylim(0,1.05)+
+  ylab("Uno's C-index")+
+  xlab("")+
+  theme_bw(base_size = 15)+ 
+  scale_x_discrete(labels = c("1) Clinical","2) Genes" , "3) Combined"))+
+  ggpubr::stat_compare_means(comparisons = my_comparisons, label.y = c(0.89, 0.95, 0.99))
 
+#calculate means for Uno's C-indexes
+Results_model_eval %>% filter(Model_id=="Cox.clinical", Metric_id == "Uno's C-index") %>% pull(value) %>% mean()
+Results_model_eval %>% filter(Model_id=="Cox.genes", Metric_id == "Uno's C-index") %>% pull(value) %>% mean()
+Results_model_eval %>% filter(Model_id=="Cox.both", Metric_id == "Uno's C-index") %>% pull(value) %>% mean()
 
 
 # Time dependant C-index = ROC-AUC(t)
+timepoints <- c("Time_dependant_AUC_6m" = "6 months",
+                "Time_dependant_AUC_1y" = "1 year",
+                "Time_dependant_AUC_2y" = "2 years")
+
+
 ROC_AUC_plot <- Results_model_eval %>% 
   filter(Metric_id %in% c("Time_dependant_AUC_6m", "Time_dependant_AUC_1y", "Time_dependant_AUC_2y")) %>% 
   mutate(across(Metric_id, 
                 ~factor(., levels=c("Time_dependant_AUC_6m", "Time_dependant_AUC_1y", "Time_dependant_AUC_2y")))) %>%
   mutate(across(Model_id, 
-                ~factor(., levels=c("Cox.clinical", "Cox.both", "Cox.genes")))) %>% 
+                ~factor(., levels=c("Cox.clinical", "Cox.genes", "Cox.both")))) %>% 
   ggplot(., aes(x = Model_id, y = value))+ 
-  geom_boxplot()+
-  facet_wrap(~Metric_id)+
-  theme_bw()+ 
-  ylim(0,1)+
-  ggtitle("Time dependant discrimination metric")
+  geom_boxplot(fill=rep(c("red4", "dodgerblue4", "green4"), 3))+
+  facet_wrap(~Metric_id, labeller = as_labeller(timepoints))+
+  theme_bw(base_size = 13)+ 
+  ylim(0,1.15)+
+  ylab("ROC-AUC(t)")+
+  xlab("")+
+  scale_x_discrete(labels = c("1) Clinical","2) Genes" , "3) Combined"))+
+  ggpubr::stat_compare_means(comparisons = my_comparisons, label.y = c(0.99, 1.05, 1.1))
+
+Results_model_eval %>% filter(Model_id=="Cox.clinical", Metric_id == "Time_dependant_AUC_6m") %>% pull(value) %>% mean()
 
 
-ggsave(C_index_plot,file="C_index_plot_3models.jpeg", height = 6, width = 8)
-ggsave(ROC_AUC_plot,file="ROC_AUC_plot_3models.jpeg", height = 6, width = 8)
+ggsave(C_index_plot,file="plots/C_index_plot_2024_06_25.jpeg", height = 5, width = 4)
+ggsave(ROC_AUC_plot,file="plots/ROC_AUC_plot_2024_06_25.jpeg", height = 6, width = 9.5)
 
 
 

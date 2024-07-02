@@ -68,8 +68,9 @@ preprocess_genes <- function(x, y, variance_cutoff = 1000, corr_cutoff = 0.95, f
   genes_univariate_keep <- names(p.values.adj[p.values.adj<fdr_cutoff])
   length(genes_univariate_keep) # 47 genes are kept
   
-  gene_data[,genes_univariate_keep]
+  resultList <- list("univariate_significant_genes" = gene_data[,genes_univariate_keep], "genes_uncorrelated" = gene_data, "univariate_result" = p.values.adj, "correlation_matrix" = genes_topVar_cor)
   
+  resultList
 }
 
 
@@ -164,6 +165,11 @@ tune_alpha <- function(alphas = seq(0, 1, 0.1), x, y, foldid, type.measure = "C"
        best_model = best_model, plot = plot)
 }
 
+
+#################### model evaluation function #####################################
+#' @description
+#' A function that inputs one hot encoded categorical variables and gene expression to generate three models and predict survival from these
+#' 
 #' @param x one hot encoded clinical variables, including outcome columns (Status_survival and Survival_days) and a column specifying sample id (Sample_ID)
 #' @param y matrix with normalized, log2 transformed and scaled gene expression values for samples(rows). Genenames in columns.
 #' @param split.percentage percentage of samples that should be included in train dataset. Default is 0.67
